@@ -19,6 +19,10 @@ const DATA = path.join(ROOT, 'data');
 const LOGS = path.join(DATA, 'logs');
 const JOBS_FILE = path.join(DATA, 'jobs.json');
 const CONFIG_FILE = path.join(DATA, 'config.json');
+const ENV_FILE = path.join(ROOT, '.env');
+try { process.loadEnvFile(ENV_FILE); } catch {}     // GEMINI_API_KEY 等設定
+// 金鑰格式有好幾種（AIza…、AQ.…），只擋明顯不是金鑰的：中文、空白、太短
+const KEY_RE = /^[\x21-\x7e]{20,}$/;
 const PORT = Number(process.env.PORT) || 5577;
 
 for (const d of [DONE, WIP, TEMP, DATA, LOGS]) fs.mkdirSync(d, { recursive: true });
@@ -54,11 +58,47 @@ const DEFAULT_CONFIG = {
   maxBudgetUsd: 0,         // 每個任務花費上限（0 = 不限；訂閱制可不設）
   claudePath: '',          // 留空 = 自動尋找
   skillDir: '',            // 留空 = 自動尋找
+  ttsModel: 'gemini-3.8-flash-tts',
+  ttsModels: [],           // 這把金鑰可用的語音模型（按「儲存並測試」時更新）
+  ttsVoice: 'auto',        // auto = 每個語詞依故事自動挑聲音
+  autoVoice: true,         // 無聲版完成後自動產生語音 → 做配音版
 };
+// [名稱, 網頁上的說明, 給自動挑選看的特色]
+const VOICES = [
+  ['Sulafat', '女・溫暖柔和', 'female, warm, storyteller'],
+  ['Vindemiatrix', '女・溫和', 'female, gentle, calm'],
+  ['Achernar', '女・輕柔', 'female, soft, soothing'],
+  ['Aoede', '女・清新輕快', 'female, breezy, friendly teacher'],
+  ['Leda', '女・年輕', 'female, youthful, like an older sister'],
+  ['Laomedeia', '女・開朗', 'female, upbeat, cheerful'],
+  ['Gacrux', '女・成熟', 'female, mature, like a grandmother or mother'],
+  ['Puck', '男・活潑', 'male, upbeat, lively, like an older brother'],
+  ['Achird', '男・友善', 'male, friendly, warm'],
+  ['Iapetus', '男・清晰', 'male, clear, steady teacher'],
+  ['Sadaltager', '男・知性', 'male, knowledgeable, calm'],
+  ['Charon', '男・穩重', 'male, informative, like a father or grandfather'],
+];
+const isVoice = v => v === 'auto' || VOICES.some(x => x[0] === v);
+const DEFAULT_TTS_STYLE = '用台灣國語，語氣溫柔、親切，速度放慢，像國中特教老師在對學生說話，每句話之間稍微停頓。';
 
 // ---------- 狀態 ----------
 const readJson = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
 let config = { ...DEFAULT_CONFIG, ...readJson(CONFIG_FILE, {}) };
+// 舊版把金鑰存在 config.json：搬到 .env
+if (config.geminiKey) {
+  if (!process.env.GEMINI_API_KEY && KEY_RE.test(config.geminiKey)) saveEnvKey(config.geminiKey);
+  delete config.geminiKey;
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 1));
+}
+function saveEnvKey(key) {
+  const head = '# Gemini API 金鑰（https://aistudio.google.com/apikey）。這個檔案不會進 git，不要分享給別人。\n';
+  let t = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : head;
+  const line = `GEMINI_API_KEY=${key}`;
+  t = /^GEMINI_API_KEY=.*$/m.test(t) ? t.replace(/^GEMINI_API_KEY=.*$/m, line) : t.replace(/\n?$/, `\n${line}\n`);
+  fs.writeFileSync(ENV_FILE, t);
+  process.env.GEMINI_API_KEY = key;
+}
+const geminiKey = () => { const k = (process.env.GEMINI_API_KEY || '').trim(); return KEY_RE.test(k) ? k : ''; };
 let jobs = readJson(JOBS_FILE, []);
 let paused = false;
 let limitUntil = 0;        // 用量上限：此時間前不啟動新任務
@@ -166,8 +206,209 @@ ${job.note2 ? `老師的補充要求：${job.note2}\n` : ''}
 先讀 ${path.join(skillDir, 'SKILL.md')}，以及它提到的 references（styles.md、pedagogy_and_narration.md），然後照流程第 1–5 步做。
 - 輸出影片：${path.join(DONE, `${job.word}_教學動畫_${job.style}.mp4`)}
 - 第 5 步要給老師的內容（故事分段與時間、旁白稿逐句、Gemini 風格提示、要注意的破音字）寫成 UTF-8 文字檔：${path.join(DONE, `${job.word}_旁白.txt`)}
+  這個檔案會被程式自動讀取來產生語音，格式必須是：第一行「【旁白稿】」，下面每行一句、以「1. 」「2. 」編號，和字幕一字不差（不要加注音或括號說明）；空一行後是「【Gemini 風格提示】」與一行提示；其餘內容（故事分段、破音字）放在後面。
 - 角色請和別的語詞不一樣（可看成品資料夾裡其他 _旁白.txt 的角色名，避免重複）。
 ${common}`;
+}
+
+// ---------- Gemini 語音 ----------
+// 從旁白稿取出逐句旁白與風格提示。新格式以【旁白稿】開頭；舊檔可能是純句子或【旁白稿（逐句…）】區段。
+function parseNarration(text) {
+  const lines = String(text).replace(/^﻿/, '').split(/\r?\n/).map(s => s.trim());
+  const isHead = s => /^【/.test(s) || /^[─—-]{4,}/.test(s);
+  const section = re => {
+    const i = lines.findIndex(s => re.test(s));
+    if (i < 0) return null;
+    const out = [];
+    for (const s of lines.slice(i + 1)) { if (isHead(s)) break; if (s) out.push(s); }
+    return out;
+  };
+  let sents = section(/^【旁白稿/);
+  if (sents) sents = sents.filter(s => /^\d+\s*[.、．]/.test(s));
+  else {
+    sents = [];
+    for (const s of lines) { if (isHead(s) || /\.mp4/.test(s)) break; if (s) sents.push(s); }
+  }
+  sents = sents.map(s => s.replace(/^\d+\s*[.、．]\s*/, ''));
+  const style = (section(/^【Gemini/) || []).join('') || DEFAULT_TTS_STYLE;
+  return { sentences: sents, style };
+}
+function readNarration(word) {
+  const f = path.join(DONE, `${word}_旁白.txt`);
+  return fs.existsSync(f) ? parseNarration(fs.readFileSync(f, 'utf8')) : null;
+}
+
+function pcmToWav(pcm, rate) {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8);
+  h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 風格提示怎麼給：2.x 會把句首的中文提示當成指示；3.x 會把中文提示照唸出來，
+// 只認句首的英文 [標籤]（不支援 systemInstruction）。實測 2026-10：英文標籤不會被唸出、會放慢語速。
+const DEFAULT_TTS_TAG = 'Speak in Taiwanese Mandarin, gently and warmly, slowly, like a special-education teacher talking to junior-high students, with a short pause between sentences';
+const tagCache = new Map([[DEFAULT_TTS_STYLE, DEFAULT_TTS_TAG]]);
+async function styleToTag(style) {
+  if (!/[㐀-鿿]/.test(style)) return style.replace(/^\[|\]$/g, '');
+  if (tagCache.has(style)) return tagCache.get(style);
+  try {
+    const r = await fetch(`${GEMINI}/models/gemini-2.5-flash:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey() },
+      body: JSON.stringify({ contents: [{ parts: [{ text: `把下面的朗讀風格要求翻成一句英文，給語音模型當作語氣指示。只輸出那句英文，不要引號或括號。\n\n${style}` }] }] }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const t = (await r.json()).candidates?.[0]?.content?.parts?.map(p => p.text).join('').trim().replace(/[\[\]"\n]/g, ' ');
+    if (t) { tagCache.set(style, t); return t; }
+  } catch {}
+  return DEFAULT_TTS_TAG;
+}
+// 自動挑聲音：讓 Gemini 文字模型讀故事，從 VOICES 選一個最適合當旁白的
+async function pickVoice(word, sentences) {
+  const list = VOICES.map(([v, , d]) => `${v}: ${d}`).join('\n');
+  const r = await fetch(`${GEMINI}/models/gemini-2.5-flash:generateContent`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey() },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `這是給國中特教班學生看的語詞教學短片「${word}」的旁白。請從下面的聲音裡，挑一個最適合當這支短片旁白的聲音。
+考量故事的主角（男生／女生、小孩／大人／長輩）、氣氛（輕鬆、溫馨、緊張、安靜），旁白要清楚、親切、適合學生聽。
+
+旁白：
+${sentences.join('\n')}
+
+可選的聲音：
+${list}
+
+只輸出 JSON：{"voice": "聲音名稱", "reason": "一句中文理由"}` }] }],
+      generationConfig: { responseMimeType: 'application/json' },
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const t = (await r.json()).candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
+  const j = JSON.parse(t.match(/\{[\s\S]*\}/)?.[0] || '{}');
+  const v = VOICES.find(x => x[0].toLowerCase() === String(j.voice || '').toLowerCase());
+  if (!v) throw new Error(`沒有挑到可用的聲音：${t.slice(0, 100)}`);
+  return { voice: v[0], reason: j.reason || '' };
+}
+
+const modelVersion = m => Number(m.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] || 0);
+async function ttsText(style, sentences) {
+  if (modelVersion(config.ttsModel) >= 3) return `[${await styleToTag(style)}] ${sentences.join('\n')}`;
+  return `${style}\n請朗讀以下內容：\n\n${sentences.join('\n')}`;
+}
+
+async function geminiTts(style, sentences, voice, log = () => {}) {
+  const text = await ttsText(style, sentences);
+  log(`送出：${text.replace(/\n/g, ' ⏎ ')}`);
+  let r, body;
+  // 503（模型忙碌）與每分鐘次數上限的 429 等一下再試；每日額度用完的 429 重試也沒用，最後會失敗
+  for (let i = 0; i < 4; i++) {
+    r = await fetch(`${GEMINI}/models/${config.ttsModel}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiKey() },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text }] }],
+        generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
+      }),
+      signal: AbortSignal.timeout(180000),
+    });
+    body = await r.json().catch(() => ({}));
+    if (r.ok || ![429, 500, 503].includes(r.status) || i === 3) break;
+    log(`Gemini 回應 ${r.status}，${30 * (i + 1)} 秒後重試`);
+    await sleep(30000 * (i + 1));
+  }
+  if (!r.ok && r.status === 400 && /voice/i.test(body.error?.message || '') && voice !== 'Sulafat') {
+    log(`這個模型不支援聲音 ${voice}，改用 Sulafat`);
+    return geminiTts(style, sentences, 'Sulafat', log);
+  }
+  if (!r.ok) {
+    const msg = body.error?.message || `HTTP ${r.status}`;
+    const e = new Error(r.status === 429 ? `Gemini 用量已達上限（429）：${msg}` : r.status === 400 || r.status === 403 ? `金鑰或模型有問題（${r.status}）：${msg}` : msg);
+    e.status = r.status; throw e;
+  }
+  const part = body.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data);
+  if (!part) throw new Error('Gemini 沒有回傳音訊（可能是文字被擋下或模型不支援語音）');
+  const data = Buffer.from(part.inlineData.data, 'base64');
+  // 2.5 回傳裸 PCM（audio/L16;rate=24000）；3.x 直接回傳完整的 WAV 檔
+  if (data.subarray(0, 4).toString() === 'RIFF') return data;
+  const rate = Number(part.inlineData.mimeType?.match(/rate=(\d+)/)?.[1]) || 24000;
+  return pcmToWav(data, rate);
+}
+const wavSeconds = wav => (wav.length - 44) / (wav.readUInt32LE(28) || 48000);
+
+// 產生語音任務：寫成 115難語詞語音\<語詞>_語音朗讀.wav（舊檔先移到「舊錄音」資料夾），完成後可接著排配音版
+async function startTts(job) {
+  Object.assign(job, { status: 'running', startedAt: Date.now(), endedAt: null, error: null, attempts: (job.attempts || 0) + 1,
+    activity: `🎙 Gemini 產生語音中（${job.voice}）…` });
+  logLine(job, `=== 產生語音（第 ${job.attempts} 次），${config.ttsModel}，聲音 ${job.voice}`);
+  saveJobs();
+  try {
+    if (!geminiKey()) throw new Error('還沒有設定 Gemini API 金鑰（在「Gemini 語音」設定裡貼上）');
+    let { style, sentences } = job;
+    if (!sentences?.length) {
+      const n = readNarration(job.word);
+      if (!n?.sentences.length) throw new Error(`找不到可用的旁白稿：${job.word}_旁白.txt`);
+      ({ style, sentences } = n);
+    }
+    if (job.voice === 'auto') {
+      job.activity = '🎙 依故事挑選聲音…'; saveJobs();
+      try {
+        const p = await pickVoice(job.word, sentences);
+        job.voice = p.voice; job.voiceReason = p.reason;
+        logLine(job, `自動挑選聲音：${p.voice}（${p.reason}）`);
+      } catch (e) {
+        job.voice = 'Sulafat';
+        logLine(job, `自動挑選聲音失敗，改用 Sulafat：${e.message}`);
+      }
+      job.activity = `🎙 Gemini 產生語音中（${job.voice}）…`; saveJobs();
+    }
+    logLine(job, `風格：${style}`);
+    logLine(job, sentences.join(' ⏎ '));
+    const wav = await geminiTts(style || DEFAULT_TTS_STYLE, sentences, job.voice, t => logLine(job, t));
+    if (job.status === 'canceled') return;
+    const file = `${job.word}_語音朗讀.wav`;
+    const dest = path.join(BASE, file);
+    const old = matchWav(job.word);
+    if (old) {
+      const bak = path.join(BASE, '舊錄音');
+      fs.mkdirSync(bak, { recursive: true });
+      fs.renameSync(path.join(BASE, old), path.join(bak, old.replace(/(\.\w+)$/, `_${Date.now().toString(36)}$1`)));
+    }
+    fs.writeFileSync(dest, wav);
+    const sec = wavSeconds(wav);
+    Object.assign(job, { status: 'done', endedAt: Date.now(), wav: file, activity: `完成（${sec.toFixed(1)} 秒）` });
+    logLine(job, `=== 完成：${file}，${sec.toFixed(1)} 秒`);
+    if (job.chain) queueVoiced(job.word, job.model);
+  } catch (e) {
+    if (job.status === 'canceled') return;
+    Object.assign(job, { status: 'failed', endedAt: Date.now(), error: String(e.message || e) });
+    logLine(job, `=== 失敗：${job.error}`);
+  }
+  saveJobs();
+}
+
+function newJob(fields) {
+  const job = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), status: 'queued', createdAt: Date.now(), model: config.model, ...fields };
+  jobs.push(job);
+  return job;
+}
+const isActive = (word, type) => jobs.some(j => j.word === word && j.type === type && ['queued', 'running'].includes(j.status));
+function queueTts(word, opts = {}) {
+  if (isActive(word, 'tts')) return null;
+  const e = scanLibrary().lib.find(x => x.word === word);
+  return newJob({ word, type: 'tts', videoStyle: e?.style || STYLES[0], voice: opts.voice || config.ttsVoice,
+    style: opts.style || '', sentences: opts.sentences || null, chain: opts.chain !== false, model: opts.model || config.model });
+}
+function queueVoiced(word, model) {
+  if (isActive(word, 'voiced')) return null;
+  const e = scanLibrary().lib.find(x => x.word === word);
+  const wav = matchWav(word);
+  if (!e?.silent || !wav) return null;
+  return newJob({ word, type: 'voiced', style: e.style, wav, model: model || config.model });
 }
 
 // ---------- 執行任務 ----------
@@ -259,6 +500,10 @@ function startJob(job) {
       job.error = ((result?.result || '') || stderr || `結束代碼 ${code}`).slice(0, 1500);
     }
     logLine(job, `=== 結束：${job.status}  US$${(job.costUsd || 0).toFixed(2)}`);
+    // 無聲版完成 → 自動用 Gemini 產生語音，再接著做配音版
+    if (job.status === 'done' && job.type === 'silent' && config.autoVoice && geminiKey()) {
+      if (queueTts(job.word, { model: job.model })) logLine(job, '=== 已排入：產生語音 → 配音版');
+    }
     saveJobs();
   });
 }
@@ -292,13 +537,19 @@ function cancelJob(job) {
 
 // ---------- 排程 ----------
 function tick() {
-  if (paused || Date.now() < limitUntil) return;
-  const running = jobs.filter(j => j.status === 'running');
+  if (paused) return;
+  // 產生語音不用 Claude 用量：一次一個，不受同時數量與 Claude 用量上限限制
+  if (!jobs.some(j => j.type === 'tts' && j.status === 'running')) {
+    const t = jobs.find(j => j.type === 'tts' && j.status === 'queued' && !isActive(j.word, 'silent'));
+    if (t) startTts(t);
+  }
+  if (Date.now() < limitUntil) return;
+  const running = jobs.filter(j => j.status === 'running' && j.type !== 'tts');
   if (running.length >= config.concurrency) return;
   const busyWords = new Set(running.map(j => j.word));
-  const next = jobs.find(j => j.status === 'queued' && !busyWords.has(j.word)
-    // 配音版要等同一個詞的無聲版完成
-    && !(j.type === 'voiced' && jobs.some(o => o.word === j.word && o.type === 'silent' && ['queued', 'running'].includes(o.status))));
+  const next = jobs.find(j => j.status === 'queued' && j.type !== 'tts' && !busyWords.has(j.word)
+    // 配音版要等同一個詞的無聲版與語音完成
+    && !(j.type === 'voiced' && (isActive(j.word, 'silent') || isActive(j.word, 'tts'))));
   if (next) startJob(next);
 }
 setInterval(tick, 2000);
@@ -363,7 +614,8 @@ const server = http.createServer(async (req, res) => {
       const { lib, wavs } = scanLibrary();
       const skillDir = findSkill();
       return send(res, 200, {
-        config, jobs, library: lib, wavs: wavs.map(f => ({ file: f, word: wavWord(f) })), styles: STYLES,
+        config: { ...config, hasKey: !!geminiKey(), keyTail: geminiKey().slice(-4) },
+        voices: VOICES, jobs, library: lib, wavs: wavs.map(f => ({ file: f, word: wavWord(f) })), styles: STYLES,
         paused, limitUntil, now: Date.now(), login: loginState,
         env: { claude: findClaude(), skillDir, fonts: fs.existsSync(path.join(FONTS, 'BpmfIansui-Regular.ttf')), out: OUT },
       });
@@ -421,8 +673,46 @@ const server = http.createServer(async (req, res) => {
       if (b.model) config.model = String(b.model);
       if (b.retryMinutes) config.retryMinutes = Math.max(1, Number(b.retryMinutes));
       if (b.maxBudgetUsd !== undefined) config.maxBudgetUsd = Math.max(0, Number(b.maxBudgetUsd) || 0);
+      if (typeof b.geminiKey === 'string' && b.geminiKey.trim()) {
+        const k = b.geminiKey.trim();
+        if (!KEY_RE.test(k)) return send(res, 400, { error: '這看起來不是 API 金鑰（金鑰不會有中文或空白，請到 aistudio.google.com/apikey 重新複製）' });
+        saveEnvKey(k);
+      }
+      if (isVoice(b.ttsVoice)) config.ttsVoice = b.ttsVoice;
+      if (config.ttsModels?.includes(b.ttsModel)) config.ttsModel = b.ttsModel;
+      if (b.autoVoice !== undefined) config.autoVoice = !!b.autoVoice;
       saveConfig(); tick();
       return send(res, 200, config);
+    }
+    if (req.method === 'GET' && p === '/api/narration') {
+      const n = readNarration(url.searchParams.get('word') || '');
+      return n ? send(res, 200, n) : send(res, 404, { error: '找不到旁白稿' });
+    }
+    if (req.method === 'POST' && p === '/api/tts') {
+      const b = await readBody(req);
+      const word = String(b.word || '').trim();
+      const sentences = String(b.sentences || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      const job = word && queueTts(word, { style: String(b.style || '').trim(), sentences: sentences.length ? sentences : null, voice: isVoice(b.voice) ? b.voice : config.ttsVoice, chain: b.chain !== false, model: b.model });
+      saveJobs(); tick();
+      return send(res, 200, { created: job ? 1 : 0 });
+    }
+    // 測試金鑰：列出可用的語音模型；設定的模型不存在時自動換成可用的
+    if (req.method === 'POST' && p === '/api/test-key') {
+      if (!geminiKey()) return send(res, 200, { ok: false, message: '還沒有填金鑰' });
+      const r = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': geminiKey() }, signal: AbortSignal.timeout(20000) }).catch(e => ({ ok: false, statusText: String(e) }));
+      const body = r.json ? await r.json().catch(() => ({})) : {};
+      if (!r.ok) return send(res, 200, { ok: false, message: body.error?.message || r.statusText || '連線失敗' });
+      const tts = (body.models || []).map(m => m.name.replace(/^models\//, '')).filter(n => /tts/i.test(n));
+      if (!tts.length) return send(res, 200, { ok: false, message: '金鑰可以用，但找不到語音（TTS）模型' });
+      // 版本新的排前面；同版本 flash > pro > lite，正式版 > preview
+      const ver = n => Number(n.match(/gemini-(d+(?:.d+)?)/)?.[1] || 0);
+      const rank = n => (/preview/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0) + (/pro/.test(n) ? 0.5 : 0);
+      tts.sort((a, b) => ver(b) - ver(a) || rank(a) - rank(b));
+      const isNew = !config.ttsModels?.length;
+      config.ttsModels = tts;
+      if (isNew || !tts.includes(config.ttsModel)) config.ttsModel = tts[0];
+      saveConfig();
+      return send(res, 200, { ok: true, message: `金鑰可以用，語音模型：${config.ttsModel}` });
     }
     if (req.method === 'POST' && p === '/api/pause') {
       const b = await readBody(req);

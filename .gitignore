@@ -5,3 +5,5 @@ fonts/
 # Claude 預覽設定
 .claude/
 node_modules/
+# 金鑰
+.env

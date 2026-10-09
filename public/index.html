@@ -127,6 +127,23 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px}
   </div>
 
   <section class="card">
+    <h2>🎙 Gemini 語音 <span class="count" id="keyState"></span></h2>
+    <div class="row">
+      <label class="label">API 金鑰
+        <input type="password" id="gKey" autocomplete="off" style="width:280px" placeholder="要換金鑰時才需要貼（會存到 .env）">
+      </label>
+      <button id="saveKey">儲存並測試</button>
+      <span class="label" id="keyMsg"></span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="label">語音模型 <select id="gModel"></select></label>
+      <label class="label">聲音 <select id="gVoice"></select></label>
+      <label class="label"><input type="checkbox" id="autoVoice" style="vertical-align:middle"> 無聲版做完後，自動產生語音並接著做配音版</label>
+    </div>
+    <div class="label" style="margin-top:8px">金鑰存在 project01\.env（不會進 git，也不會上傳到別處），之後打開工作台不用再貼。聲音選「自動」時，每個語詞會依故事挑一個適合的聲音。語音檔會存成「語詞_語音朗讀.wav」，原本的錄音會先移到「舊錄音」資料夾。</div>
+  </section>
+
+  <section class="card">
     <h2>任務看板 <button class="small" id="clearDone" style="margin-left:auto">清除已完成</button></h2>
     <div class="board">
       <div class="col"><h3>⏳ 排隊中 <span id="nQ"></span></h3><div id="colQ"></div></div>
@@ -184,7 +201,17 @@ function render() {
   if (!styleTouched) { $('model').value = config.model; }
   for (const [id, k] of [['cfgConc','concurrency'],['cfgRetry','retryMinutes'],['cfgBudget','maxBudgetUsd']])
     if (document.activeElement !== $(id)) $(id).value = config[k];
-  $('pauseBtn').textContent = (paused || limitUntil > now) ? '▶ 繼續佇列' : '⏸ 暫停佇列';
+  $('keyState').textContent = config.hasKey ? `已從 .env 讀取（…${config.keyTail}）` : '未設定';
+  if (!$('gVoice').options.length) $('gVoice').innerHTML = voiceOpts(config.ttsVoice);
+  if (document.activeElement !== $('gVoice')) $('gVoice').value = config.ttsVoice;
+  const models = config.ttsModels?.length ? config.ttsModels : [config.ttsModel];
+  if ($('gModel').dataset.list !== models.join()) {
+    $('gModel').innerHTML = models.map((m, i) => `<option value="${esc(m)}">${esc(m)}${i === 0 && models.length > 1 ? '（最新）' : ''}</option>`).join('');
+    $('gModel').dataset.list = models.join();
+  }
+  if (document.activeElement !== $('gModel')) $('gModel').value = config.ttsModel;
+  $('autoVoice').checked = config.autoVoice;
+  $('pauseBtn').textContent =(paused || limitUntil > now) ? '▶ 繼續佇列' : '⏸ 暫停佇列';
 
   // stats
   const running = jobs.filter(j => j.status === 'running');
@@ -206,11 +233,15 @@ function render() {
   cols.done.reverse(); cols.failed.reverse();
   const jobCard = j => {
     const el = j.startedAt ? fmtDur((j.endedAt && j.status !== 'running' ? j.endedAt : now) - j.startedAt) : '';
-    const typeTag = j.type === 'voiced' ? '<span class="tag v">配音版</span>' : '<span class="tag s">無聲版</span>';
-    let body = `<div class="w">${esc(j.word)}${typeTag}</div><div class="meta">${esc(j.style)}・${esc(j.model)}${el ? '・' + el : ''}${j.attempts > 1 ? `・第${j.attempts}次` : ''}</div>`;
-    if (j.status === 'running') body += `<div class="meta"><span class="spin"></span>${j.turns || 0} 步・輸出 ${fmtK(j.outTokens)} tokens</div><div class="act">${esc(j.activity)}</div>`;
+    const typeTag = j.type === 'voiced' ? '<span class="tag v">配音版</span>' : j.type === 'tts' ? '<span class="tag v">產生語音</span>' : '<span class="tag s">無聲版</span>';
+    let body = `<div class="w">${esc(j.word)}${typeTag}</div><div class="meta">${j.type === 'tts' ? 'Gemini・' + esc(j.voice) + (j.chain ? '・接著做配音版' : '') : esc(j.style) + '・' + esc(j.model)}${el ? '・' + el : ''}${j.attempts > 1 ? `・第${j.attempts}次` : ''}</div>`;
+    if (j.type === 'tts') {
+      if (j.status === 'running') body += `<div class="act"><span class="spin"></span>${esc(j.activity)}</div>`;
+      if (j.status === 'done') body += `<div class="meta">${esc(j.activity)}</div>`;
+      if (j.voiceReason) body += `<div class="meta">🗣 挑 ${esc(j.voice)}：${esc(j.voiceReason)}</div>`;
+    } else if (j.status === 'running') body +=`<div class="meta"><span class="spin"></span>${j.turns || 0} 步・輸出 ${fmtK(j.outTokens)} tokens</div><div class="act">${esc(j.activity)}</div>`;
     if (j.status === 'queued' && j.note) body += `<div class="meta">${esc(j.note)}</div>`;
-    if (j.status === 'done') body += `<div class="meta">US$${(j.costUsd||0).toFixed(2)}・${j.turns || 0} 步</div>`;
+    if (j.status === 'done' && j.type !== 'tts') body += `<div class="meta">US$${(j.costUsd||0).toFixed(2)}・${j.turns || 0} 步</div>`;
     if (j.status === 'failed' && j.error) body += `<div class="err">${esc(j.error)}</div>`;
     const btns = [];
     if (j.startedAt) btns.push(`<button class="small" onclick="showLog('${j.id}')">紀錄</button>`);
@@ -231,6 +262,8 @@ function render() {
     if (e.silent) btns.push(`<button class="small" onclick="play('${esc(e.silent.file)}')">▶ 無聲版</button>`);
     if (e.voiced) btns.push(`<button class="small" onclick="play('${esc(e.voiced.file)}')">▶ 配音版</button>`);
     if (e.narration) btns.push(`<button class="small" onclick="showText('${esc(e.narration)}')">旁白稿</button>`);
+    if (e.wav) btns.push(`<button class="small" onclick="playWav('${esc(e.wav)}')">▶ 語音</button>`);
+    if (e.narration && !active.has(e.word + '|tts')) btns.push(`<button class="small" style="border-color:var(--blue);color:var(--blue)" onclick="ttsDlg('${esc(e.word)}')">${e.wav ? '重新產生語音' : '產生語音'}</button>`);
     if (e.silent && e.wav && !e.voiced && !active.has(e.word + '|voiced')) btns.push(`<button class="small" style="border-color:var(--blue);color:var(--blue)" onclick="mkVoiced('${esc(e.word)}')">做配音版</button>`);
     if (!active.has(e.word + '|silent')) btns.push(`<button class="small" onclick="redo('${esc(e.word)}')">重做</button>`);
     return `<div class="word"><div class="w">${esc(e.word)}</div>
@@ -264,6 +297,29 @@ dlg.addEventListener('close', () => { $('dlgB').innerHTML = ''; clearInterval(lo
 function play(f) { openDlg(f, `<video src="/out/${encodeURIComponent(f)}" controls autoplay></video>`); }
 function playWav(f) { openDlg(f, `<audio src="/wav/${encodeURIComponent(f)}" controls autoplay style="width:100%"></audio>`); }
 async function showText(f) { const t = await (await fetch('/api/text?file=' + encodeURIComponent(f))).text(); openDlg(f, `<pre>${esc(t)}</pre>`); }
+const voiceOpts = sel => [['auto', '自動（依故事挑選）'], ...S.voices].map(([v, n]) =>
+  `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(n)}${v === 'auto' ? '' : '・' + v}</option>`).join('');
+async function ttsDlg(word) {
+  const r = await fetch('/api/narration?word=' + encodeURIComponent(word));
+  if (!r.ok) return alert('找不到這個語詞的旁白稿');
+  const n = await r.json();
+  const e = S.library.find(x => x.word === word);
+  openDlg(`${word}：產生語音`, `
+    ${S.config.hasKey ? '' : '<div class="banner bad" style="margin-bottom:10px">還沒有設定 Gemini API 金鑰，請先在「Gemini 語音」貼上金鑰。</div>'}
+    <div class="label">風格提示</div>
+    <textarea id="tStyle" style="font-size:15px;min-height:56px">${esc(n.style)}</textarea>
+    <div class="label" style="margin-top:8px">旁白（一行一句，要和字幕一樣；某個字唸錯時，可以改成同音字再產生）</div>
+    <textarea id="tText" style="min-height:200px">${esc(n.sentences.join('\n'))}</textarea>
+    <div class="row" style="margin-top:10px">
+      <label class="label">聲音 <select id="tVoice">${voiceOpts(S.config.ttsVoice)}</select></label>
+      <label class="label"><input type="checkbox" id="tChain" ${e?.silent ? 'checked' : 'disabled'} style="vertical-align:middle"> 產生後接著做配音版</label>
+      <button class="primary" id="tGo" style="margin-left:auto">產生語音</button>
+    </div>`);
+  $('tGo').onclick = async () => {
+    await api('/api/tts', { method: 'POST', body: { word, style: $('tStyle').value, sentences: $('tText').value, voice: $('tVoice').value, chain: $('tChain').checked, model: $('model').value } });
+    dlg.close(); refresh();
+  };
+}
 let logTimer = null;
 async function showLog(id) {
   const j = S.jobs.find(x => x.id === id);
@@ -288,7 +344,22 @@ $('go').onclick = async () => {
 };
 const saveCfg = () => api('/api/config', { method: 'POST', body: { concurrency: $('cfgConc').value, retryMinutes: $('cfgRetry').value, maxBudgetUsd: $('cfgBudget').value } }).then(refresh);
 for (const id of ['cfgConc','cfgRetry','cfgBudget']) $(id).onchange = saveCfg;
-$('pauseBtn').onclick = () => api('/api/pause', { method: 'POST', body: { paused: !(S.paused || S.limitUntil > S.now) } }).then(refresh);
+$('saveKey').onclick = async () => {
+  const key = $('gKey').value.trim();
+  $('keyMsg').textContent = '測試中…';
+  if (key) {
+    const r = await api('/api/config', { method: 'POST', body: { geminiKey: key } });
+    if (!r.ok) { $('keyMsg').textContent = '✖ ' + (await r.json()).error; return; }
+  }
+  const r = await (await api('/api/test-key', { method: 'POST' })).json();
+  $('keyMsg').textContent = (r.ok ? '✔ ' : '✖ ') + r.message;
+  if (r.ok) $('gKey').value = '';
+  refresh();
+};
+$('gModel').onchange = () => api('/api/config', { method: 'POST', body: { ttsModel: $('gModel').value } }).then(refresh);
+$('gVoice').onchange =() => api('/api/config', { method: 'POST', body: { ttsVoice: $('gVoice').value } }).then(refresh);
+$('autoVoice').onchange = () => api('/api/config', { method: 'POST', body: { autoVoice: $('autoVoice').checked } }).then(refresh);
+$('pauseBtn').onclick =() => api('/api/pause', { method: 'POST', body: { paused: !(S.paused || S.limitUntil > S.now) } }).then(refresh);
 $('loginBtn').onclick = async () => { $('loginBtn').textContent = '檢查中…'; await api('/api/check-login', { method: 'POST' }); $('loginBtn').textContent = '檢查登入'; refresh(); };
 $('openOut').onclick = () => api('/api/open-out', { method: 'POST' });
 $('clearDone').onclick = () => api('/api/clear-finished', { method: 'POST' }).then(refresh);
