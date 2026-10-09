@@ -1,0 +1,14 @@
+{
+  "name": "vocab-video-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "語詞教學動畫工作台：用 vocab-video skill 排隊、同時製作多個語詞動畫",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "login": "node login.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

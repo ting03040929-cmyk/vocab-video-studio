@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>語詞動畫工作台</title>
+<style>
+:root{
+  --bg:#f6f1e7; --card:#fffdf8; --ink:#2b2622; --muted:#7a7068; --line:#e6dccb;
+  --red:#c83a30; --red-soft:#fbe7e3; --gold:#f2b632; --gold-soft:#fdf3d7;
+  --green:#2f8a57; --green-soft:#e2f3e8; --blue:#2f6fae; --blue-soft:#e3eef9; --gray-soft:#efebe4;
+  --radius:14px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 "Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,sans-serif}
+header{background:var(--red);color:#fff;padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+header h1{margin:0;font-size:20px;letter-spacing:2px;color:#fde7a6}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.pill{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:99px;font-size:13px;white-space:nowrap}
+.pill.bad{background:#fff;color:var(--red);font-weight:700}
+main{max-width:1280px;margin:0 auto;padding:18px 16px 60px;display:grid;gap:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+h2 .count{background:var(--gray-soft);border-radius:99px;padding:0 9px;font-size:13px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+textarea,input,select{font:inherit;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fff;color:var(--ink)}
+textarea{width:100%;min-height:76px;resize:vertical;font-size:18px}
+button{font:inherit;border:1px solid var(--line);background:#fff;border-radius:10px;padding:6px 12px;cursor:pointer;color:var(--ink)}
+button:hover{border-color:var(--ink)}
+button.primary{background:var(--red);border-color:var(--red);color:#fff;font-weight:700;padding:9px 22px;font-size:16px}
+button.small{padding:2px 9px;font-size:13px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1.5px solid var(--line);border-radius:99px;padding:5px 14px;cursor:pointer;background:#fff;user-select:none}
+.chip.on{border-color:var(--red);background:var(--red-soft);color:var(--red);font-weight:700}
+.label{font-size:13px;color:var(--muted)}
+.top{display:grid;grid-template-columns:1.4fr 1fr;gap:18px}
+@media (max-width:900px){.top{grid-template-columns:1fr}}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.stat{background:var(--gray-soft);border-radius:10px;padding:8px 12px}
+.stat b{display:block;font-size:22px}
+.settings{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;margin-top:12px;font-size:14px}
+.settings input{width:90px}
+.board{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+@media (max-width:1000px){.board{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.board{grid-template-columns:1fr}}
+.col{background:var(--gray-soft);border-radius:var(--radius);padding:10px;min-height:120px}
+.col h3{margin:2px 4px 10px;font-size:14px;display:flex;justify-content:space-between}
+.job{background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;border-left:5px solid var(--line)}
+.job.running{border-left-color:var(--gold)}
+.job.done{border-left-color:var(--green)}
+.job.failed{border-left-color:var(--red)}
+.job.canceled{opacity:.6}
+.job .w{font-size:19px;font-weight:700}
+.job .meta{font-size:12px;color:var(--muted)}
+.job .act{font-size:13px;margin-top:6px;background:var(--gold-soft);border-radius:8px;padding:4px 8px;word-break:break-all;max-height:62px;overflow:hidden}
+.job .err{font-size:12px;margin-top:6px;background:var(--red-soft);color:var(--red);border-radius:8px;padding:4px 8px;max-height:80px;overflow:auto;white-space:pre-wrap}
+.job .btns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.tag{display:inline-block;font-size:12px;border-radius:6px;padding:0 6px;margin-left:4px;vertical-align:middle}
+.tag.v{background:var(--blue-soft);color:var(--blue)}
+.tag.s{background:var(--gray-soft);color:var(--muted)}
+.spin{display:inline-block;width:10px;height:10px;border:2px solid var(--gold);border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;margin-right:4px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.word{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+.word .w{font-size:22px;font-weight:700;letter-spacing:2px}
+.word .st{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 8px;font-size:12px}
+.ok{background:var(--green-soft);color:var(--green);border-radius:6px;padding:1px 7px}
+.no{background:var(--gray-soft);color:var(--muted);border-radius:6px;padding:1px 7px}
+.wv{background:var(--blue-soft);color:var(--blue);border-radius:6px;padding:1px 7px}
+.word .btns{display:flex;gap:6px;flex-wrap:wrap}
+.banner{background:var(--gold-soft);border:1px solid var(--gold);border-radius:12px;padding:10px 14px}
+.banner.bad{background:var(--red-soft);border-color:var(--red);color:var(--red)}
+dialog{border:none;border-radius:16px;padding:0;max-width:min(960px,94vw);width:100%;background:var(--card)}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog .hd{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+dialog .bd{padding:14px 16px;max-height:75vh;overflow:auto}
+dialog pre{white-space:pre-wrap;font:13px/1.55 Consolas,"Microsoft JhengHei",monospace;margin:0}
+video{width:100%;border-radius:10px;background:#000}
+.empty{color:var(--muted);font-size:13px;padding:8px}
+details summary{cursor:pointer;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>語詞教學動畫工作台</h1>
+  <div class="pills" id="pills"></div>
+</header>
+
+<main>
+  <div id="banners"></div>
+
+  <div class="top">
+    <section class="card">
+      <h2>新增語詞</h2>
+      <textarea id="words" placeholder="輸入語詞，可一次輸入很多個，用空白、逗號或換行分隔&#10;例如：不慌不忙 五花八門 寬敞"></textarea>
+      <div style="margin:10px 0 6px" class="label">風格</div>
+      <div class="chips" id="styles"></div>
+      <div class="row" style="margin-top:12px">
+        <label class="label">模型
+          <select id="model">
+            <option value="sonnet">Sonnet（較省，推薦）</option>
+            <option value="opus">Opus（品質最好，較耗用量）</option>
+          </select>
+        </label>
+        <input id="note" placeholder="補充要求（選填），例如：角色要有阿嬤" style="flex:1;min-width:200px">
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="go">開始製作</button>
+        <span class="label" id="goMsg"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>用量</h2>
+      <div class="stats" id="stats"></div>
+      <div class="settings">
+        <span>同時製作</span><span><input type="number" id="cfgConc" min="1" max="6"> 個任務</span>
+        <span>碰到上限後</span><span><input type="number" id="cfgRetry" min="1"> 分鐘自動續跑</span>
+        <span>每個任務上限</span><span>US$ <input type="number" id="cfgBudget" min="0" step="0.5"> <span class="label">（0 = 不限）</span></span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="pauseBtn"></button>
+        <button id="loginBtn">檢查登入</button>
+        <button id="openOut">開啟成品資料夾</button>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>任務看板 <button class="small" id="clearDone" style="margin-left:auto">清除已完成</button></h2>
+    <div class="board">
+      <div class="col"><h3>⏳ 排隊中 <span id="nQ"></span></h3><div id="colQ"></div></div>
+      <div class="col"><h3>🎬 製作中 <span id="nR"></span></h3><div id="colR"></div></div>
+      <div class="col"><h3>✅ 完成 <span id="nD"></span></h3><div id="colD"></div></div>
+      <div class="col"><h3>⚠️ 失敗／取消 <span id="nF"></span></h3><div id="colF"></div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>已完成的語詞 <span class="count" id="nLib"></span></h2>
+    <div class="lib" id="lib"></div>
+    <details style="margin-top:14px">
+      <summary>尚未製作影片的錄音檔（<span id="nWav"></span>）</summary>
+      <div class="lib" id="wavs" style="margin-top:10px"></div>
+    </details>
+  </section>
+</main>
+
+<dialog id="dlg"><div class="hd"><b id="dlgT"></b><button onclick="dlg.close()">關閉</button></div><div class="bd" id="dlgB"></div></dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+let S = null, style = null, styleTouched = false;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = (p, o = {}) => fetch(p, { headers: { 'Content-Type': 'application/json' }, ...o, body: o.body ? JSON.stringify(o.body) : undefined });
+const fmtDur = ms => { const s = Math.max(0, Math.round(ms / 1000)); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m/60)}時${m%60}分` : `${m}分${String(s%60).padStart(2,'0')}秒`; };
+const fmtK = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'k' : String(n||0);
+
+async function refresh() {
+  try { S = await (await api('/api/state')).json(); } catch { $('banners').innerHTML = '<div class="banner bad">連不上伺服器，請確認「啟動工作台.bat」視窗還開著。</div>'; return; }
+  render();
+}
+
+function render() {
+  const { jobs, library, config, env, login, paused, limitUntil, now } = S;
+  // header pills
+  $('pills').innerHTML = [
+    `<span class="pill ${login.ok ? '' : 'bad'}">${login.ok ? '✔ 已登入 Claude' : login.checked ? '✖ 未登入' : '… 檢查登入中'}</span>`,
+    `<span class="pill ${env.skillDir ? '' : 'bad'}">${env.skillDir ? '✔ skill' : '✖ 找不到 skill'}</span>`,
+    `<span class="pill ${env.fonts ? '' : 'bad'}">${env.fonts ? '✔ 芫荽字型' : '✖ 字型'}</span>`,
+  ].join('');
+
+  // banners
+  const b = [];
+  if (login.checked && !login.ok) b.push(`<div class="banner bad"><b>Claude 尚未登入。</b>請雙擊 project01 裡的「登入Claude.bat」完成登入，再按「檢查登入」。<br><span style="font-size:12px">${esc(login.message)}</span></div>`);
+  if (limitUntil > now) b.push(`<div class="banner">⏸ 碰到用量上限，<b>${fmtDur(limitUntil - now)}</b> 後自動續跑排隊中的任務。（也可以按「繼續」立即重試）</div>`);
+  else if (paused) b.push(`<div class="banner">⏸ 佇列已暫停：製作中的任務會做完，但不會開始新的。</div>`);
+  $('banners').innerHTML = b.join('');
+
+  // styles
+  if (!style) style = S.styles[0];
+  $('styles').innerHTML = S.styles.map((s, i) => `<span class="chip ${s === style ? 'on' : ''}" data-s="${esc(s)}">${esc(s)}${i === 0 ? '（推薦）' : ''}</span>`).join('');
+  document.querySelectorAll('.chip').forEach(c => c.onclick = () => { style = c.dataset.s; render(); });
+  if (!styleTouched) { $('model').value = config.model; }
+  for (const [id, k] of [['cfgConc','concurrency'],['cfgRetry','retryMinutes'],['cfgBudget','maxBudgetUsd']])
+    if (document.activeElement !== $(id)) $(id).value = config[k];
+  $('pauseBtn').textContent = (paused || limitUntil > now) ? '▶ 繼續佇列' : '⏸ 暫停佇列';
+
+  // stats
+  const running = jobs.filter(j => j.status === 'running');
+  const today = new Date(); today.setHours(0,0,0,0);
+  const cost = js => js.reduce((a, j) => a + (j.costUsd || 0), 0);
+  const tok = js => js.reduce((a, j) => a + (j.usage ? j.usage.out : (j.outTokens || 0)), 0);
+  const todayJobs = jobs.filter(j => (j.startedAt || 0) >= today.getTime());
+  const doneJobs = jobs.filter(j => j.status === 'done' && j.costUsd);
+  const avg = doneJobs.length ? cost(doneJobs) / doneJobs.length : 0;
+  $('stats').innerHTML = `
+    <div class="stat"><span class="label">製作中 / 上限</span><b>${running.length} / ${config.concurrency}</b></div>
+    <div class="stat"><span class="label">排隊中</span><b>${jobs.filter(j => j.status === 'queued').length}</b></div>
+    <div class="stat"><span class="label">今日用量（約當 API 價）</span><b>US$${cost(todayJobs).toFixed(2)}</b><span class="label">輸出 ${fmtK(tok(todayJobs))} tokens</span></div>
+    <div class="stat"><span class="label">平均每個語詞</span><b>US$${avg.toFixed(2)}</b><span class="label">共 ${doneJobs.length} 個有紀錄</span></div>`;
+
+  // board
+  const cols = { queued: [], running: [], done: [], failed: [] };
+  for (const j of jobs) (cols[j.status] || cols.failed).push(j);
+  cols.done.reverse(); cols.failed.reverse();
+  const jobCard = j => {
+    const el = j.startedAt ? fmtDur((j.endedAt && j.status !== 'running' ? j.endedAt : now) - j.startedAt) : '';
+    const typeTag = j.type === 'voiced' ? '<span class="tag v">配音版</span>' : '<span class="tag s">無聲版</span>';
+    let body = `<div class="w">${esc(j.word)}${typeTag}</div><div class="meta">${esc(j.style)}・${esc(j.model)}${el ? '・' + el : ''}${j.attempts > 1 ? `・第${j.attempts}次` : ''}</div>`;
+    if (j.status === 'running') body += `<div class="meta"><span class="spin"></span>${j.turns || 0} 步・輸出 ${fmtK(j.outTokens)} tokens</div><div class="act">${esc(j.activity)}</div>`;
+    if (j.status === 'queued' && j.note) body += `<div class="meta">${esc(j.note)}</div>`;
+    if (j.status === 'done') body += `<div class="meta">US$${(j.costUsd||0).toFixed(2)}・${j.turns || 0} 步</div>`;
+    if (j.status === 'failed' && j.error) body += `<div class="err">${esc(j.error)}</div>`;
+    const btns = [];
+    if (j.startedAt) btns.push(`<button class="small" onclick="showLog('${j.id}')">紀錄</button>`);
+    if (j.status === 'running' || j.status === 'queued') btns.push(`<button class="small" onclick="act('${j.id}','cancel')">取消</button>`);
+    if (j.status === 'queued') btns.push(`<button class="small" onclick="act('${j.id}','up')">優先</button>`);
+    if (j.status === 'failed' || j.status === 'canceled') btns.push(`<button class="small" onclick="act('${j.id}','retry')">重試</button>`);
+    if (j.status !== 'running') btns.push(`<button class="small" onclick="del('${j.id}')">移除</button>`);
+    return `<div class="job ${j.status}">${body}<div class="btns">${btns.join('')}</div></div>`;
+  };
+  const fill = (id, nid, arr) => { $(id).innerHTML = arr.length ? arr.map(jobCard).join('') : '<div class="empty">（無）</div>'; $(nid).textContent = arr.length || ''; };
+  fill('colQ','nQ',cols.queued); fill('colR','nR',cols.running); fill('colD','nD',cols.done); fill('colF','nF',cols.failed);
+
+  // library
+  const active = new Set(jobs.filter(j => ['queued','running'].includes(j.status)).map(j => j.word + '|' + j.type));
+  $('nLib').textContent = library.length;
+  $('lib').innerHTML = library.length ? library.map(e => {
+    const btns = [];
+    if (e.silent) btns.push(`<button class="small" onclick="play('${esc(e.silent.file)}')">▶ 無聲版</button>`);
+    if (e.voiced) btns.push(`<button class="small" onclick="play('${esc(e.voiced.file)}')">▶ 配音版</button>`);
+    if (e.narration) btns.push(`<button class="small" onclick="showText('${esc(e.narration)}')">旁白稿</button>`);
+    if (e.silent && e.wav && !e.voiced && !active.has(e.word + '|voiced')) btns.push(`<button class="small" style="border-color:var(--blue);color:var(--blue)" onclick="mkVoiced('${esc(e.word)}')">做配音版</button>`);
+    if (!active.has(e.word + '|silent')) btns.push(`<button class="small" onclick="redo('${esc(e.word)}')">重做</button>`);
+    return `<div class="word"><div class="w">${esc(e.word)}</div>
+      <div class="st">${e.silent ? '<span class="ok">無聲版 ✔</span>' : '<span class="no">無聲版 —</span>'}
+      ${e.voiced ? '<span class="ok">配音版 ✔</span>' : e.wav ? '<span class="wv">有錄音檔</span>' : '<span class="no">尚無錄音</span>'}
+      ${e.style ? `<span class="no">${esc(e.style)}</span>` : ''}</div>
+      <div class="btns">${btns.join('')}</div></div>`;
+  }).join('') : '<div class="empty">還沒有成品。</div>';
+
+  // wavs without video
+  const libWords = new Set(library.filter(e => e.silent).map(e => e.word));
+  const queuedWords = new Set(jobs.filter(j => ['queued','running'].includes(j.status)).map(j => j.word));
+  const pending = S.wavs.filter(w => !libWords.has(w.word));
+  $('nWav').textContent = pending.length;
+  $('wavs').innerHTML = pending.map(w => `<div class="word"><div class="w">${esc(w.word)}</div>
+    <div class="st"><span class="wv">有錄音檔</span>${queuedWords.has(w.word) ? '<span class="ok">已排入</span>' : ''}</div>
+    <div class="btns"><button class="small" onclick="playWav('${esc(w.file)}')">▶ 聽</button>
+    ${queuedWords.has(w.word) ? '' : `<button class="small" onclick="addWord('${esc(w.word)}')">加入輸入框</button>`}</div></div>`).join('') || '<div class="empty">（無）</div>';
+}
+
+async function act(id, a) { await api(`/api/jobs/${id}/${a}`, { method: 'POST' }); refresh(); }
+async function del(id) { await api(`/api/jobs/${id}`, { method: 'DELETE' }); refresh(); }
+async function mkVoiced(word) { await api('/api/jobs', { method: 'POST', body: { words: word, type: 'voiced', model: $('model').value } }); refresh(); }
+async function redo(word) {
+  if (!confirm(`重新製作「${word}」？（會覆蓋原本的無聲版）`)) return;
+  await api('/api/jobs', { method: 'POST', body: { words: word, style, model: $('model').value } }); refresh();
+}
+function addWord(w) { const t = $('words'); t.value = (t.value.trim() + ' ' + w).trim(); t.focus(); }
+function openDlg(title, html) { $('dlgT').textContent = title; $('dlgB').innerHTML = html; dlg.showModal(); }
+dlg.addEventListener('close', () => { $('dlgB').innerHTML = ''; clearInterval(logTimer); });
+function play(f) { openDlg(f, `<video src="/out/${encodeURIComponent(f)}" controls autoplay></video>`); }
+function playWav(f) { openDlg(f, `<audio src="/wav/${encodeURIComponent(f)}" controls autoplay style="width:100%"></audio>`); }
+async function showText(f) { const t = await (await fetch('/api/text?file=' + encodeURIComponent(f))).text(); openDlg(f, `<pre>${esc(t)}</pre>`); }
+let logTimer = null;
+async function showLog(id) {
+  const j = S.jobs.find(x => x.id === id);
+  const load = async () => {
+    const t = await (await fetch(`/api/jobs/${id}/log`)).text();
+    const box = $('dlgB'); const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.innerHTML = `<pre>${esc(t || '（還沒有紀錄）')}${j.result ? '\n\n────── 最後回覆 ──────\n' + esc(j.result) : ''}</pre>`;
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  };
+  openDlg(`${j.word} 的製作紀錄`, ''); await load(); $('dlgB').scrollTop = 1e9;
+  logTimer = setInterval(load, 3000);
+}
+
+$('model').onchange = () => { styleTouched = true; };
+$('go').onclick = async () => {
+  const words = $('words').value.trim();
+  if (!words) { $('goMsg').textContent = '請先輸入語詞'; return; }
+  const r = await (await api('/api/jobs', { method: 'POST', body: { words, style, model: $('model').value, note: $('note').value } })).json();
+  $('goMsg').textContent = r.created ? `已加入 ${r.created} 個任務` : '這些語詞已經在排隊或製作中';
+  if (r.created) { $('words').value = ''; $('note').value = ''; }
+  refresh();
+};
+const saveCfg = () => api('/api/config', { method: 'POST', body: { concurrency: $('cfgConc').value, retryMinutes: $('cfgRetry').value, maxBudgetUsd: $('cfgBudget').value } }).then(refresh);
+for (const id of ['cfgConc','cfgRetry','cfgBudget']) $(id).onchange = saveCfg;
+$('pauseBtn').onclick = () => api('/api/pause', { method: 'POST', body: { paused: !(S.paused || S.limitUntil > S.now) } }).then(refresh);
+$('loginBtn').onclick = async () => { $('loginBtn').textContent = '檢查中…'; await api('/api/check-login', { method: 'POST' }); $('loginBtn').textContent = '檢查登入'; refresh(); };
+$('openOut').onclick = () => api('/api/open-out', { method: 'POST' });
+$('clearDone').onclick = () => api('/api/clear-finished', { method: 'POST' }).then(refresh);
+
+refresh(); setInterval(refresh, 3000);
+</script>
+</body>
+</html>

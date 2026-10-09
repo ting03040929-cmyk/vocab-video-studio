@@ -1,0 +1,7 @@
+# 任務紀錄與設定（每台電腦不同、會一直變）
+data/
+# 字型檔很大，可重新下載（見 SKILL.md 字型段落）
+fonts/
+# Claude 預覽設定
+.claude/
+node_modules/
