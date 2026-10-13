@@ -62,6 +62,7 @@ const DEFAULT_CONFIG = {
   ttsModels: [],           // 這把金鑰可用的語音模型（按「儲存並測試」時更新）
   ttsVoice: 'auto',        // auto = 每個語詞依故事自動挑聲音
   autoVoice: true,         // 無聲版完成後自動產生語音 → 做配音版
+  autoClean: true,         // 配音版完成後，無聲版／WAV／工作資料夾丟到資源回收筒，只留配音版
 };
 // [名稱, 網頁上的說明, 給自動挑選看的特色]
 const VOICES = [
@@ -157,7 +158,7 @@ function scanLibrary() {
   }
   const wavs = listWavs();
   for (const w of Object.keys(lib)) lib[w].wav = matchWav(w, wavs);
-  return { lib: Object.values(lib).sort((a, b) => (b.silent?.mtime || 0) - (a.silent?.mtime || 0)), wavs };
+  return { lib: Object.values(lib).sort((a, b) => ((b.silent || b.voiced)?.mtime || 0) - ((a.silent || a.voiced)?.mtime || 0)), wavs };
 }
 function listWavs() {
   try { return fs.readdirSync(BASE).filter(f => /\.(wav|mp3)$/i.test(f)); } catch { return []; }
@@ -168,6 +169,57 @@ function wavWord(f) {
 function matchWav(word, wavs = listWavs()) {
   return wavs.find(f => wavWord(f) === word) || null;
 }
+
+// ---------- 配音版完成後清理 ----------
+// 只留配音版影片（和很小的旁白稿）；無聲版、配音說明、語音 WAV、工作資料夾都丟到資源回收筒（救得回來）
+function recycle(paths) {
+  paths = paths.filter(p => fs.existsSync(p));
+  if (!paths.length) return Promise.resolve(0);
+  const q = p => `'${p.replace(/'/g, "''")}'`;
+  const ps = 'Add-Type -AssemblyName Microsoft.VisualBasic\n' + paths.map(p => fs.statSync(p).isDirectory()
+    ? `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(${q(p)},'OnlyErrorDialogs','SendToRecycleBin')`
+    : `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(${q(p)},'OnlyErrorDialogs','SendToRecycleBin')`).join('\n');
+  return new Promise(res => execFile('powershell', ['-NoProfile', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
+    { windowsHide: true }, err => res(err ? -1 : paths.filter(p => !fs.existsSync(p)).length)));
+}
+function cleanupFiles(word) {
+  const doneFiles = (() => { try { return fs.readdirSync(DONE); } catch { return []; } })().filter(f => {
+    const m = f.match(VIDEO_RE);
+    return (m && m[1] === word && !m[3]) || f === `${word}_配音說明.txt`;
+  });
+  return [...doneFiles.map(f => path.join(DONE, f)),
+    ...listWavs().filter(f => wavWord(f) === word).map(f => path.join(BASE, f)),
+    path.join(WIP, word), path.join(TEMP, word)];
+}
+// 有配音版的語詞（在「已完成」或老師整理好的「影片」資料夾）→ 配音版最新的修改時間
+function voicedWords() {
+  const words = new Map();
+  const walk = (dir, depth) => {
+    let ents = []; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (e.isDirectory() && depth > 0) walk(path.join(dir, e.name), depth - 1);
+      const m = e.isFile() && e.name.match(VIDEO_RE);
+      if (!m || !m[3]) continue;
+      const st = fs.statSync(path.join(dir, e.name));
+      if (st.size > 0) words.set(m[1], Math.max(words.get(m[1]) || 0, st.mtimeMs));
+    }
+  };
+  walk(DONE, 0);
+  walk(path.join(BASE, '影片'), 2);
+  return words;
+}
+// justVoiced：剛做好配音版，全部清；否則（啟動時補清）比配音版新的檔案不動，可能是老師重做中
+async function cleanupWord(word, job, justVoiced = false) {
+  const vt = voicedWords().get(word);
+  if (!config.autoClean || !vt) return;
+  if (jobs.some(j => j.word === word && ['queued', 'running'].includes(j.status))) return;
+  const files = cleanupFiles(word).filter(p => justVoiced || p.endsWith('_配音說明.txt') || (fs.existsSync(p) && fs.statSync(p).mtimeMs <= vt));
+  const n = await recycle(files);
+  if (n > 0) console.log(`  已清理「${word}」的中間檔 ${n} 項（在資源回收筒）`);
+  if (job) logLine(job, n < 0 ? '=== 清理中間檔失敗' : `=== 已把 ${n} 項中間檔丟到資源回收筒，只留配音版`);
+}
+// 啟動時把以前做好配音版的語詞也清一次
+setTimeout(async () => { for (const w of voicedWords().keys()) await cleanupWord(w); }, 5000);
 
 // ---------- 提示詞 ----------
 function promptFor(job, skillDir) {
@@ -504,6 +556,8 @@ function startJob(job) {
     if (job.status === 'done' && job.type === 'silent' && config.autoVoice && geminiKey()) {
       if (queueTts(job.word, { model: job.model })) logLine(job, '=== 已排入：產生語音 → 配音版');
     }
+    // 配音版完成 → 等工作資料夾搬完（最多重試約 12 秒）再清理
+    if (job.status === 'done' && job.type === 'voiced') setTimeout(() => cleanupWord(job.word, job, true), 15000);
     saveJobs();
   });
 }
@@ -681,6 +735,7 @@ const server = http.createServer(async (req, res) => {
       if (isVoice(b.ttsVoice)) config.ttsVoice = b.ttsVoice;
       if (config.ttsModels?.includes(b.ttsModel)) config.ttsModel = b.ttsModel;
       if (b.autoVoice !== undefined) config.autoVoice = !!b.autoVoice;
+      if (b.autoClean !== undefined) config.autoClean = !!b.autoClean;
       saveConfig(); tick();
       return send(res, 200, config);
     }

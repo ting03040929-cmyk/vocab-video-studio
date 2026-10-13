@@ -139,6 +139,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:14px}
       <label class="label">語音模型 <select id="gModel"></select></label>
       <label class="label">聲音 <select id="gVoice"></select></label>
       <label class="label"><input type="checkbox" id="autoVoice" style="vertical-align:middle"> 無聲版做完後，自動產生語音並接著做配音版</label>
+      <label class="label"><input type="checkbox" id="autoClean" style="vertical-align:middle"> 配音版做完後，只留配音版影片（無聲版、語音檔、工作資料夾丟到資源回收筒）</label>
     </div>
     <div class="label" style="margin-top:8px">金鑰存在 project01\.env（不會進 git，也不會上傳到別處），之後打開工作台不用再貼。聲音選「自動」時，每個語詞會依故事挑一個適合的聲音。語音檔會存成「語詞_語音朗讀.wav」，原本的錄音會先移到「舊錄音」資料夾。</div>
   </section>
@@ -211,6 +212,7 @@ function render() {
   }
   if (document.activeElement !== $('gModel')) $('gModel').value = config.ttsModel;
   $('autoVoice').checked = config.autoVoice;
+  $('autoClean').checked = config.autoClean;
   $('pauseBtn').textContent =(paused || limitUntil > now) ? '▶ 繼續佇列' : '⏸ 暫停佇列';
 
   // stats
@@ -359,6 +361,7 @@ $('saveKey').onclick = async () => {
 $('gModel').onchange = () => api('/api/config', { method: 'POST', body: { ttsModel: $('gModel').value } }).then(refresh);
 $('gVoice').onchange =() => api('/api/config', { method: 'POST', body: { ttsVoice: $('gVoice').value } }).then(refresh);
 $('autoVoice').onchange = () => api('/api/config', { method: 'POST', body: { autoVoice: $('autoVoice').checked } }).then(refresh);
+$('autoClean').onchange = () => api('/api/config', { method: 'POST', body: { autoClean: $('autoClean').checked } }).then(refresh);
 $('pauseBtn').onclick =() => api('/api/pause', { method: 'POST', body: { paused: !(S.paused || S.limitUntil > S.now) } }).then(refresh);
 $('loginBtn').onclick = async () => { $('loginBtn').textContent = '檢查中…'; await api('/api/check-login', { method: 'POST' }); $('loginBtn').textContent = '檢查登入'; refresh(); };
 $('openOut').onclick = () => api('/api/open-out', { method: 'POST' });
